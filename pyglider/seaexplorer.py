@@ -130,21 +130,21 @@ def raw_to_rawnc(indir, outdir, deploymentyaml, incremental=True):
                             pldGPCTD = outx.where(np.isfinite(
                                 outx.GPCTD_TEMPERATURE), drop=True)
                             pldGPCTD = pldGPCTD.drop_vars(flbbcd)
-                            pldGPCTD = pldGPCTD.drop_vars(arod)
+                            # pldGPCTD = pldGPCTD.drop_vars(arod)
                             pldGPCTD.to_netcdf(fnout[:-3] + '_gpctd.nc', 'w',
                                                unlimited_dims=['time'])
                             pldGPCTD = outx.where(np.isfinite(
                                 outx.FLBBCD_CHL_COUNT), drop=True)
                             pldGPCTD = pldGPCTD.drop_vars(gpctd)
-                            pldGPCTD = pldGPCTD.drop_vars(arod)
+                            # pldGPCTD = pldGPCTD.drop_vars(arod)
                             pldGPCTD.to_netcdf(fnout[:-3] + '_flbbcd.nc', 'w',
                                                unlimited_dims=['time'])
-                            pldGPCTD = outx.where(np.isfinite(
-                                outx.AROD_FT_DO), drop=True)
-                            pldGPCTD = pldGPCTD.drop_vars(gpctd)
-                            pldGPCTD = pldGPCTD.drop_vars(flbbcd)
-                            pldGPCTD.to_netcdf(fnout[:-3] + '_arod.nc', 'w',
-                                               unlimited_dims=['time'])
+                            # pldGPCTD = outx.where(np.isfinite(
+                            #     outx.AROD_FT_DO), drop=True)
+                            # pldGPCTD = pldGPCTD.drop_vars(gpctd)
+                            # pldGPCTD = pldGPCTD.drop_vars(flbbcd)
+                            # pldGPCTD.to_netcdf(fnout[:-3] + '_arod.nc', 'w',
+                            #                    unlimited_dims=['time'])
 
             if len(badfiles) > 0:
                 _log.warning('Some files could not be parsed:')
@@ -180,7 +180,7 @@ def merge_rawnc(indir, outdir, deploymentyaml, incremental=False, kind='raw'):
     with open(deploymentyaml) as fin:
         deployment = yaml.safe_load(fin)
     metadata = deployment['metadata']
-    id = metadata['glider_name'] # + metadata['glider_serial']
+    id = metadata['glider_name'] + metadata['glider_serial']
     print('id', id)
     outgli = outdir + '/' + id + '-rawgli.nc'
     outpld = outdir + '/' + id + '-' + kind + 'pld.nc'
@@ -231,14 +231,14 @@ def merge_rawnc(indir, outdir, deploymentyaml, incremental=False, kind='raw'):
             pass
         with xr.open_mfdataset(f'{indir}/*.{kind}.*flbbcd.nc', decode_times=False, lock=False) as pld:
             pld.to_netcdf(outpld[:-5]+'_flbbcd.nc', 'w', unlimited_dims=['time'])
-        _log.info('Working on AROD')
-        try:
-            os.remove(outpld[:-5]+'_arod.nc')
-        except:
-            pass
-        with xr.open_mfdataset(f'{indir}/*.{kind}.*arod.nc', decode_times=False, lock=False) as pld:
-            pld = pld.coarsen(time=8, boundary='trim').mean()
-            pld.to_netcdf(outpld[:-5]+'_arod.nc', 'w', unlimited_dims=['time'])
+        # _log.info('Working on AROD')
+        # try:
+        #     os.remove(outpld[:-5]+'_arod.nc')
+        # except:
+        #     pass
+        # with xr.open_mfdataset(f'{indir}/*.{kind}.*arod.nc', decode_times=False, lock=False) as pld:
+        #     pld = pld.coarsen(time=8, boundary='trim').mean()
+        #     pld.to_netcdf(outpld[:-5]+'_arod.nc', 'w', unlimited_dims=['time'])
 
     _log.info('Done merge_rawnc')
 
@@ -382,12 +382,12 @@ def raw_to_L1timeseries_raw(indir, outdir, deploymentyaml, kind='raw',
     metadata = deployment['metadata']
     ncvar = deployment['netcdf_variables']
 
-    id = metadata['glider_name']  # + metadata['glider_serial']
+    id = metadata['glider_name'] + metadata['glider_serial']
     gli = xr.open_dataset(indir + '/' + id + '-rawgli.nc', decode_times=False)
     ctd = xr.open_dataset(indir + '/' + id + '-' + kind+ 'p_gpctd.nc',
                           decode_times=False)
-    arod = xr.open_dataset(indir + '/' + id + '-' + kind+ 'p_arod.nc',
-                      decode_times=False)
+    # arod = xr.open_dataset(indir + '/' + id + '-' + kind+ 'p_arod.nc',
+    #                   decode_times=False)
     flb = xr.open_dataset(indir + '/' + id + '-' + kind+ 'p_flbbcd.nc',
                       decode_times=False)
 
@@ -427,11 +427,11 @@ def raw_to_L1timeseries_raw(indir, outdir, deploymentyaml, kind='raw',
                 val = convert(ctd[sensorname])
                 val = _interp_pld_to_pld(ctd, ds, val, indctd)
                 ncvar['method'] = 'linear fill'
-            elif sensorname in arod.keys():
-                _log.debug('sensorname %s', sensorname)
-                val = convert(arod[sensorname])
-                val = _interp_pld_to_pld(arod, ds, val, indctd)
-                ncvar['method'] = 'linear fill'
+            # elif sensorname in arod.keys():
+            #     _log.debug('sensorname %s', sensorname)
+            #     val = convert(arod[sensorname])
+            #     val = _interp_pld_to_pld(arod, ds, val, indctd)
+            #     ncvar['method'] = 'linear fill'
             elif sensorname in flb.keys():
                 _log.debug('sensorname %s', sensorname)
                 val = convert(flb[sensorname])
@@ -487,11 +487,11 @@ def raw_to_L1timeseries_raw(indir, outdir, deploymentyaml, kind='raw',
     ds.attrs['deployment_end'] = str(end)
 
     try:
-        os.mkdir('L0-timeseries')
+        os.mkdir(outdir)
     except:
         pass
     id0 = ds.attrs['deployment_name']
-    outname = 'L0-timeseries/' + id0 +  '_L0.nc'
+    outname = outdir + id0 +  '_L0.nc'
     _log.info('writing %s', outname)
     ds.to_netcdf(outname, 'w')
 
