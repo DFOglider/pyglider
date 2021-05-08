@@ -131,14 +131,18 @@ def raw_to_rawnc(indir, outdir, deploymentyaml, incremental=True):
                                 outx.GPCTD_TEMPERATURE), drop=True)
                             pldGPCTD = pldGPCTD.drop_vars(flbbcd)
                             # pldGPCTD = pldGPCTD.drop_vars(arod)
-                            pldGPCTD.to_netcdf(fnout[:-3] + '_gpctd.nc', 'w',
-                                               unlimited_dims=['time'])
+                            if pldGPCTD.indexes["time"].size > 20:
+                                _log.warning('Number of data points too small. Skipping nc write')
+                                pldGPCTD.to_netcdf(fnout[:-3] + '_gpctd.nc', 'w',
+                                                   unlimited_dims=['time'])
                             pldGPCTD = outx.where(np.isfinite(
                                 outx.FLBBCD_CHL_COUNT), drop=True)
                             pldGPCTD = pldGPCTD.drop_vars(gpctd)
                             # pldGPCTD = pldGPCTD.drop_vars(arod)
-                            pldGPCTD.to_netcdf(fnout[:-3] + '_flbbcd.nc', 'w',
-                                               unlimited_dims=['time'])
+                            if pldGPCTD.indexes["time"].size > 20:
+                                _log.warning('Number of data points too small. Skipping nc write')
+                                pldGPCTD.to_netcdf(fnout[:-3] + '_flbbcd.nc', 'w',
+                                                   unlimited_dims=['time'])
                             # pldGPCTD = outx.where(np.isfinite(
                             #     outx.AROD_FT_DO), drop=True)
                             # pldGPCTD = pldGPCTD.drop_vars(gpctd)
