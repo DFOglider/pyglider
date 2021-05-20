@@ -62,7 +62,7 @@ def raw_to_rawnc(indir, outdir, deploymentyaml, incremental=True, min_samples_in
         binary files are re-parsed.
 
     min_samples_in_file : int
-        Minimum number of samples in a yo to trigger writing a netcdf file.
+        Minimum number of samples in a raw file to trigger writing a netcdf file.
         Defaults to 5
 
     Returns
