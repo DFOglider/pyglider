@@ -41,7 +41,7 @@ def _needsupdating(ftype, fin, fout):
 def _sort(ds):
     return ds.sortby('time')
 
-def raw_to_rawnc(indir, outdir, deploymentyaml, incremental=True):
+def raw_to_rawnc(indir, outdir, deploymentyaml, incremental=True, min_samples_in_file=5):
     """
     Convert seaexplorer text files to raw netcdf files.
 
@@ -60,6 +60,10 @@ def raw_to_rawnc(indir, outdir, deploymentyaml, incremental=True):
     incremental : bool, optional
         If *True* (default), only netcdf files that are older than the
         binary files are re-parsed.
+
+    min_samples_in_file : int
+        Minimum number of samples in a raw file to trigger writing a netcdf file.
+        Defaults to 5
 
     Returns
     -------
@@ -132,10 +136,8 @@ def raw_to_rawnc(indir, outdir, deploymentyaml, incremental=True):
                             pldGPCTD = outx.where(np.isfinite(
                                 outx.GPCTD_TEMPERATURE), drop=True)
                             pldGPCTD = pldGPCTD.drop_vars(flbbcd)
-
                             # pldGPCTD = pldGPCTD.drop_vars(arod)
-                            if pldGPCTD.indexes["time"].size > 20:
-                                _log.warning('Number of data points too small. Skipping nc write')
+                            if pldGPCTD.indexes["time"].size > min_samples_in_file:
                                 pldGPCTD.to_netcdf(fnout[:-3] + '_gpctd.nc', 'w',
                                                    unlimited_dims=['time'])
 
@@ -143,8 +145,7 @@ def raw_to_rawnc(indir, outdir, deploymentyaml, incremental=True):
                                 outx.FLBBCD_CHL_COUNT), drop=True)
                             pldGPCTD = pldGPCTD.drop_vars(gpctd)
                             # pldGPCTD = pldGPCTD.drop_vars(arod)
-                            if pldGPCTD.indexes["time"].size > 20:
-                                _log.warning('Number of data points too small. Skipping nc write')
+                            if pldGPCTD.indexes["time"].size > min_samples_in_file:
                                 pldGPCTD.to_netcdf(fnout[:-3] + '_flbbcd.nc', 'w',
                                                    unlimited_dims=['time'])
 
@@ -152,7 +153,7 @@ def raw_to_rawnc(indir, outdir, deploymentyaml, incremental=True):
                             #     outx.AROD_FT_DO), drop=True)
                             # pldGPCTD = pldGPCTD.drop_vars(gpctd)
                             # pldGPCTD = pldGPCTD.drop_vars(flbbcd)
-                            # if pldGPCTD.indexes["time"].size > 5:
+                            # if pldGPCTD.indexes["time"].size > min_samples_in_file:
                             #     pldGPCTD.to_netcdf(fnout[:-3] + '_arod.nc', 'w',
                             #                        unlimited_dims=['time'])
                             # else:
