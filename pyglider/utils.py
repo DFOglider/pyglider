@@ -7,6 +7,8 @@ import numpy as np
 from scipy.signal import argrelextrema
 import gsw
 import logging
+import yaml
+
 
 _log = logging.getLogger(__name__)
 
@@ -56,9 +58,13 @@ def get_glider_depth(ds):
 
     """
     good = np.where(~np.isnan(ds.pressure))[0]
-    ds['depth'] = ds.pressure * 0.
-    ds['depth'].values = -gsw.z_from_p(ds.pressure.values,
-                                       ds.latitude.values)
+    ds['depth'] = ds.pressure
+    try:
+        meanlat = ds.latitude.mean(skipna=True)
+        ds['depth'].values = -gsw.z_from_p(ds.pressure.values,
+            ds.latitude.fillna(meanlat).values)
+    except AttributeError:
+        pass
     # now we really want to know where it is, so interpolate:
     if len(good) > 0:
         ds['depth'].values = np.interp(
@@ -69,9 +75,10 @@ def get_glider_depth(ds):
             'comment': 'from science pressure and interpolated',
             'instrument': 'instrument_ctd',
             'observation_type': 'calulated',
-            'accuracy': '1', 'precision': '2', 'resolution': '0.02',
+            'accuracy': 1.0,
+            'precision': 2.0, 'resolution': 0.02,
             'platform': 'platform',
-            'valid_min': '0', 'valid_max': '2000',
+            'valid_min': 0.0, 'valid_max': 2000.0,
             'reference_datum': 'surface', 'positive': 'down'}
     ds['depth'].attrs = attr
     return ds
@@ -300,15 +307,16 @@ def get_derived_eos_raw(ds):
         ('method', 'get_derived_eos_raw'),
         ('observation_type', 'calulated'),
         ('instrument', 'instrument_ctd'),
-        ('valid_max', '40.0'),
-        ('valid_min', '0.0'),
-        ('accuracy', '0.01'),
-        ('precision', '0.01'),
-        ('resolution', '0.001')])
+        ('valid_max', 40.0),
+        ('valid_min', 0.0),
+        ('accuracy', 0.01),
+        ('precision', 0.01),
+        ('resolution', 0.001)])
     attrs = fill_required_attrs(attrs)
     ds['salinity'].attrs = attrs
-    sa = gsw.SA_from_SP(ds['salinity'], ds['pressure'], ds['longitude'],
-                        ds['latitude'])
+    long = ds.longitude.fillna(ds.longitude.mean(skipna=True))
+    lat = ds.latitude.fillna(ds.latitude.mean(skipna=True))
+    sa = gsw.SA_from_SP(ds['salinity'], ds['pressure'], long, lat)
     ct = gsw.CT_from_t(sa, ds['temperature'], ds['pressure'])
     ds['potential_density'] = (('time'), 1000 + gsw.density.sigma0(sa, ct).values)
     attrs = collections.OrderedDict([
@@ -320,9 +328,9 @@ def get_derived_eos_raw(ds):
         ('method', 'get_derived_eos_raw'),
         ('observation_type', 'calulated'),
         ('instrument', 'instrument_ctd'),
-        ('accuracy', '0.01'),
-        ('precision', '0.01'),
-        ('resolution', '0.001')
+        ('accuracy', 0.01),
+        ('precision', 0.01),
+        ('resolution', 0.001)
         ])
     attrs = fill_required_attrs(attrs)
     ds['potential_density'].attrs = attrs
@@ -338,11 +346,11 @@ def get_derived_eos_raw(ds):
         ('sources', 'salinity temperature pressure'),
         ('instrument', 'instrument_ctd'),
         ('method', 'get_derived_eos_raw'),
-        ('valid_min', '1000.0'),
-        ('valid_max', '1040.0'),
-        ('accuracy', '0.01'),
-        ('precision', '0.01'),
-        ('resolution', '0.001')
+        ('valid_min', 990.0),
+        ('valid_max', 1040.0),
+        ('accuracy', 0.01),
+        ('precision', 0.01),
+        ('resolution', 0.001)
         ])
     attrs = fill_required_attrs(attrs)
     ds['density'].attrs = attrs
@@ -357,9 +365,9 @@ def get_derived_eos_raw(ds):
         ('observation_type', 'calulated'),
         ('method', 'get_derived_eos_raw'),
         ('instrument', 'instrument_ctd'),
-        ('accuracy', '0.002'),
-        ('precision', '0.001'),
-        ('resolution', '0.0001')
+        ('accuracy', 0.002),
+        ('precision', 0.001),
+        ('resolution', 0.0001)
     ])
     attrs = fill_required_attrs(attrs)
     ds['potential_temperature'].attrs = attrs
@@ -568,6 +576,7 @@ def gappy_fill_vertical(data):
             data[:, j][ind[0]:ind[-1]] = np.interp(int, ind, data[ind, j])
     return data
 
+
 def find_gaps(sample_time, timebase, maxgap):
     """
     Return an index into *timebase* where True are times in gaps of *sample_time* larger
@@ -576,17 +585,18 @@ def find_gaps(sample_time, timebase, maxgap):
     # figure out which sample each time in time base belongs to:
     time_index = np.searchsorted(sample_time, timebase, side='right')
     time_index = np.clip(time_index, 0, len(sample_time)-1)
-    
+
     # figure out the space between sample pairs
     dt = np.concatenate(([0], np.diff(sample_time)))
     # get the gap size for each timebase data point:
     ddt = dt[time_index]
-    
-    # get the indices of timebase that are too large and account for the 
-    # degenerate case when a timebase point falls directly on a sample time. 
-    index = ~np.logical_or((ddt <= maxgap),(np.isin(timebase,sample_time)))
-      
+
+    # get the indices of timebase that are too large and account for the
+    # degenerate case when a timebase point falls directly on a sample time.
+    index = ~np.logical_or((ddt <= maxgap), (np.isin(timebase,sample_time)))
+
     return index
+
 
 def _parse_gliderxml_pos(fname):
     """
@@ -664,6 +674,24 @@ def example_gridplot(filename, outname,
             if ylim:
                 ax.set_ylim(ylim)
         fig.savefig(outname, dpi=dpi)
+
+
+def _get_deployment(deploymentyaml):
+    """
+    Take the list of files in *deploymentyaml* and parse them
+    for deployment information, with subsequent files overwriting
+    previous files.
+    """
+    if isinstance(deploymentyaml, str):
+        deploymentyaml = [deploymentyaml,]
+    deployment = {}
+    for nn, d in enumerate(deploymentyaml):
+        with open(d) as fin:
+            deployment_ = yaml.safe_load(fin)
+            for k in deployment_:
+                deployment[k] = deployment_[k]
+
+    return deployment
 
 
 __all__ = ['get_distance_over_ground', 'get_glider_depth', 'get_profiles_new',

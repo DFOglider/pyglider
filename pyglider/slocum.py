@@ -16,7 +16,7 @@ import os
 import time
 import xarray as xr
 import xml.etree.ElementTree as ET
-import yaml
+from collections.abc import Iterable
 
 import pyglider.utils as utils
 
@@ -621,8 +621,8 @@ def merge_rawnc(indir, outdir, deploymentyaml,
 
     scisuffix = scisuffix.lower()
     glidersuffix = glidersuffix.lower()
-    with open(deploymentyaml) as fin:
-        deployment = yaml.safe_load(fin)
+    deployment = utils._get_deployment(deploymentyaml)
+
     metadata = deployment['metadata']
     id = metadata['glider_name'] + metadata['glider_serial']
 
@@ -684,8 +684,7 @@ def raw_to_timeseries(indir, outdir, deploymentyaml, *,
         name of the new merged netcdf file.
     """
 
-    with open(deploymentyaml) as fin:
-        deployment = yaml.safe_load(fin)
+    deployment = utils._get_deployment(deploymentyaml)
     metadata = deployment['metadata']
     ncvar = deployment['netcdf_variables']
     device_data = deployment['glider_devices']
@@ -760,7 +759,7 @@ def raw_to_timeseries(indir, outdir, deploymentyaml, *,
     ds = ds.assign_coords(depth=ds.depth)
 
     ds['time'] = (ds.time.values.astype('timedelta64[s]') +
-                  np.datetime64('1970-01-01T00:00:00'))
+                  np.datetime64('1970-01-01T00:00:00')).astype('datetime64[ns]')
     ds = utils.fill_metadata(ds, deployment['metadata'], device_data)
     start = ds['time'].values[0]
     end = ds['time'].values[-1]
@@ -807,8 +806,13 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
     outdir : string
         Directory to put the merged timeseries files.
 
-    deploymentyaml : str
-        YAML text file with deployment information for this glider.
+    deploymentyaml : str or list
+        Name of YAML text file with deployment information for this glider.
+
+        If a list, then the YAML files are read in order, and any top-level dictionaries
+        are overwritten from the previous YAMLs.  The advantage of this is that it allows
+        metadata that is common to multiple ways of processing the data come from the
+        first file, and then subsequent files change "netcdf_variables" if desired.
 
     profile_filt_time : float
         time in seconds over which to smooth the pressure time series for
@@ -827,8 +831,8 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
     if not have_dbdreader:
         raise ImportError('Cannot import dbdreader')
 
-    with open(deploymentyaml) as fin:
-        deployment = yaml.safe_load(fin)
+    deployment = utils._get_deployment(deploymentyaml)
+
     ncvar = deployment['netcdf_variables']
     device_data = deployment['glider_devices']
     thenames = list(ncvar.keys())
@@ -857,12 +861,15 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
         else:
             baseind = nn
 
+    print(*sensors)
     # get the data, with `time_base` as the time source that
     # all other variables are synced to:
     data = list(dbd.get_sync(*sensors))
     # get the time:
     time = data.pop(0)
     ds['time'] = (('time'), time, attr)
+    ds['latitude'] = 0 * ds.time
+    ds['longitude'] = 0 * ds.time
     # get the time_base data:
     basedata = data.pop(0)
     # slot the time_base variable into the right place in the
@@ -887,8 +894,8 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
 
             # interpolate only over those gaps that are smaller than 'maxgap'
             _t, _ = dbd.get(ncvar[name]['source'])
-            tg_ind = utils.find_gaps(_t,time,maxgap) 
-            val[tg_ind] = np.nan            
+            tg_ind = utils.find_gaps(_t,time,maxgap)
+            val[tg_ind] = np.nan
 
             val = utils._zero_screen(val)
             val = convert(val)
@@ -906,6 +913,7 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
         attrs = utils.fill_required_attrs(attrs)
         ds[name] = (('time'), val, attrs)
 
+
     _log.info(f'Getting glider depths, {ds}')
     _log.debug(f'HERE, {ds.pressure[0:100]}')
 
@@ -919,8 +927,8 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
 
     # screen out-of-range times; these won't convert:
     ds['time'] = ds.time.where((ds.time>0) & (ds.time<6.4e9), np.NaN)
-    ds['time'] = (('time'), ds.time.values.astype('timedelta64[s]') +
-                  np.datetime64('1970-01-01T00:00:00'), attr)
+    ds['time'] = (('time'), (ds.time.values.astype('timedelta64[s]') +
+                  np.datetime64('1970-01-01T00:00:00')).astype('datetime64[ns]'), attr)
 
     ds = utils.fill_metadata(ds, deployment['metadata'], device_data)
     start = ds['time'].values[0]
@@ -944,7 +952,9 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
     outname = (outdir + '/' + ds.attrs['deployment_name'] + fnamesuffix + '.nc')
     _log.info('writing %s', outname)
     ds.to_netcdf(outname, 'w',
-                 encoding={'time': {'units': 'seconds since 1970-01-01T00:00:00Z'}})
+                 encoding={'time': {'units': 'seconds since 1970-01-01T00:00:00Z',
+                                    '_FillValue': -999999,
+                                    'dtype': 'int64'}})
 
     return outname
 
@@ -1064,7 +1074,7 @@ def parse_logfiles(files):
 
     # now parse them
     out = xr.Dataset(
-        coords={'time': ('surfacing', np.zeros(ntimes, dtype='datetime64[s]'))})
+        coords={'time': ('surfacing', np.zeros(ntimes, dtype='datetime64[ns]'))})
     out['ampH'] = ('surfacing', np.zeros(ntimes) * np.NaN)
     out['lon'] = ('surfacing', np.zeros(ntimes) * np.NaN)
     out['lat'] = ('surfacing', np.zeros(ntimes) * np.NaN)
@@ -1073,7 +1083,7 @@ def parse_logfiles(files):
         timestring = times[i][11:-13]
         try:
             out['time'][i] = np.datetime64(
-                datetime.strptime(timestring, '%a %b %d %H:%M:%S %Y'))
+                datetime.strptime(timestring, '%a %b %d %H:%M:%S %Y'), 'ns')
             st = amph[i].index('=')
             en = amph[i][st:].index(' ') + st
             out['ampH'][i] = float(amph[i][(st+1):en])

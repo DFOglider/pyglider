@@ -35,10 +35,9 @@ def extract_timeseries_profiles(inname, outdir, deploymentyaml):
     except FileExistsError:
         pass
 
-    with open(deploymentyaml) as fin:
-        deployment = yaml.safe_load(fin)
-    meta = deployment['metadata']
+    deployment = utils._get_deployment(deploymentyaml)
 
+    meta = deployment['metadata']
     with xr.open_dataset(inname) as ds:
         _log.info('Extracting profiles: opening %s', inname)
         profiles = np.unique(ds.profile_index)
@@ -78,6 +77,12 @@ def extract_timeseries_profiles(inname, outdir, deploymentyaml):
                 dss['profile_id'].attrs = profile_meta['profile_id']
                 dss['profile_time'] = dss.time.mean()
                 dss['profile_time'].attrs = profile_meta['profile_time']
+                # remove units so they can be encoded later:
+                try:
+                    del dss.profile_time.attrs['units']
+                    del dss.profile_time.attrs['calendar']
+                except KeyError:
+                    pass
                 dss['profile_lon'] = dss.longitude.mean()
                 dss['profile_lon'].attrs = profile_meta['profile_lon']
                 dss['profile_lat'] = dss.latitude.mean()
@@ -87,7 +92,7 @@ def extract_timeseries_profiles(inname, outdir, deploymentyaml):
                 dss['lon'] = dss['longitude']
                 dss['platform'] = np.NaN
                 comment = (meta['glider_model'] + ' operated by ' +
-                           meta['institution'])
+                        meta['institution'])
                 dss['platform'].attrs['comment'] = comment
                 dss['platform'].attrs['id'] = (
                     meta['glider_name'] + meta['glider_serial'])
@@ -111,25 +116,32 @@ def extract_timeseries_profiles(inname, outdir, deploymentyaml):
 
                 # ancillary variables::
                 to_fill = ['temperature', 'pressure', 'conductivity',
-                           'salinity', 'density', 'lon', 'lat', 'depth']
+                        'salinity', 'density', 'lon', 'lat', 'depth']
                 for name in to_fill:
                     dss[name].attrs['ancillary_variables'] = name + '_qc'
-
                 # outname = outdir + '/' + utils.get_file_id(dss) + '.nc'
                 _log.info('Writing %s', outname)
-                timeunits = 'seconds since 1970-01-01T00:00:00Z'
+                timeunits = 'nanoseconds since 1970-01-01T00:00:00Z'
                 timecalendar = 'gregorian'
+                try:
+                    del dss.profile_time.attrs['_FillValue']
+                    del dss.profile_time.attrs['units']
+                except KeyError:
+                    pass
                 dss.to_netcdf(outname, encoding={'time': {'units': timeunits,
-                                                          'calendar': timecalendar},
+                                                          'calendar': timecalendar,
+                                                          'dtype': 'float64'},
                                                           'profile_time':
-                                                         {'units': timeunits}})
+                                                         {'units': timeunits,
+                                                         '_FillValue': -99999.0,
+                                                         'dtype': 'float64'}}
+                                                         )
 
                 # add traj_strlen using bare ntcdf to make IOOS happy
                 with netCDF4.Dataset(outname, 'r+') as nc:
                     nc.renameDimension('string%d' % trajlen, 'traj_strlen')
 
-
-def make_gridfiles(inname, outdir, deploymentyaml, *, fnamesuffix='', dz=1):
+def make_gridfiles(inname, outdir, deploymentyaml, *, fnamesuffix='', dz=1, starttime='1970-01-01'):
     """
     Turn a timeseries netCDF file into a vertically gridded netCDF.
 
@@ -160,11 +172,12 @@ def make_gridfiles(inname, outdir, deploymentyaml, *, fnamesuffix='', dz=1):
     except FileExistsError:
         pass
 
-    with open(deploymentyaml) as fin:
-        deployment = yaml.safe_load(fin)
+    deployment = utils._get_deployment(deploymentyaml)
+
     profile_meta = deployment['profile_variables']
 
-    ds = xr.open_dataset(inname)
+    ds = xr.open_dataset(inname, decode_times=True)
+    ds = ds.where(ds.time > np.datetime64(starttime), drop=True)
     _log.info(f'Working on: {inname}')
     _log.debug(str(ds))
     _log.debug(str(ds.time[0]))
@@ -174,7 +187,7 @@ def make_gridfiles(inname, outdir, deploymentyaml, *, fnamesuffix='', dz=1):
     profiles = [p for p in profiles if (~np.isnan(p) and not (p % 1)
                                         and (p > 0))]
     profile_bins = np.hstack((np.array(profiles) - 0.5, [profiles[-1]+0.5]))
-
+    _log.debug(profile_bins)
     Nprofiles = len(profiles)
     _log.info(f'Nprofiles {Nprofiles}')
     depth_bins = np.arange(0, 1100.1, dz)
@@ -183,8 +196,9 @@ def make_gridfiles(inname, outdir, deploymentyaml, *, fnamesuffix='', dz=1):
     dsout = xr.Dataset(
         coords={'depth': ('depth', depths),
                 'profile': ('time', profiles)})
+    print('Booo', ds.time, ds.temperature)
     ds['time_1970'] = ds.temperature.copy()
-    ds['time_1970'].values = ds.time.values.astype(np.float64)/1e9
+    ds['time_1970'].values = ds.time.values.astype(np.float64)
     for td in ('time_1970', 'longitude', 'latitude'):
         good = np.where(~np.isnan(ds[td]) & (ds['profile_index'] % 1 == 0))[0]
         dat, xedges, binnumber = stats.binned_statistic(
@@ -193,7 +207,7 @@ def make_gridfiles(inname, outdir, deploymentyaml, *, fnamesuffix='', dz=1):
                 bins=[profile_bins])
         if td == 'time_1970':
             td = 'time'
-            dat = dat.astype('timedelta64[s]') + np.datetime64('1970-01-01T00:00:00')
+            dat = dat.astype('timedelta64[ns]') + np.datetime64('1970-01-01T00:00:00')
         _log.info(f'{td} {len(dat)}')
         dsout[td] = (('time'), dat, ds[td].attrs)
     ds.drop('time_1970')
@@ -249,8 +263,8 @@ def make_gridfiles(inname, outdir, deploymentyaml, *, fnamesuffix='', dz=1):
 
     outname = outdir + '/' + ds.attrs['deployment_name'] + '_grid' + fnamesuffix + '.nc'
     _log.info('Writing %s', outname)
-    timeunits = 'seconds since 1970-01-01T00:00:00Z'
-    dsout.to_netcdf(outname, encoding={'time': {'units': timeunits}})
+    # timeunits = 'nanoseconds since 1970-01-01T00:00:00Z'
+    dsout.to_netcdf(outname)
     _log.info('Done gridding')
 
     return outname

@@ -1,8 +1,8 @@
-name: pyglider
+name: pyglider-test
 channels:
   - conda-forge
 dependencies:
-  - python
+  - python>=3.9
   - numpy
   - pip
   - xarray
@@ -15,6 +15,6 @@ dependencies:
   - pytest-cov
   - pooch
   - matplotlib
-  - polars<0.16
   - pip:
-    - dbdreader<0.4.15
+    - dbdreader
+    - polars
