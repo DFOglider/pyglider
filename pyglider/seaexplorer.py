@@ -38,7 +38,7 @@ def _sort(ds):
     return ds.sortby('time')
 
 
-def raw_to_rawnc(indir, outdir, deploymentyaml, incremental=True,
+def raw_to_rawnc(indir, outdir, incremental=True,
                  min_samples_in_file=5, dropna_subset=None, dropna_thresh=1):
     """
     Convert seaexplorer text files to raw parquet files.
@@ -46,14 +46,11 @@ def raw_to_rawnc(indir, outdir, deploymentyaml, incremental=True,
     Parameters
     ----------
     indir : str
-        Directory with the raw files are kept.  Recommend naming this
-        directory "raw"
+        Directory where the raw ``*gli.sub*`` and ``*pl1.[sub,raw].*`` files are kept.
+        Recommend naming this directory "raw"
 
     outdir : str
         Directory to write the matching ``*.nc`` files. Recommend ``rawnc``.
-
-    deploymentyaml : str
-        YAML text file with deployment information for this glider.
 
     incremental : bool, optional
         If *True* (default), only netcdf files that are older than the
@@ -206,29 +203,26 @@ def drop_pre_1971_samples(df):
     return df.filter(pl.col("time") > dt_1971)
 
 
-def merge_parquet(indir, outdir, deploymentyaml, incremental=False, kind='raw'):
+def merge_parquet(indir, outdir, deploymentyaml, kind='raw'):
     """
     Merge all the raw netcdf files in indir.  These are meant to be
-    the raw flight and science files from the slocum.
+    the raw glider (navigation), gli, and payload (science), pld1, files from the glider.
 
     Parameters
     ----------
     indir : str
-        Directory where the raw ``*.ebd.nc`` and ``*.dbd.nc`` files are.
+        Directory pointing to the raw ``*.gli.sub.*.parquet`` and ``*.pld1.[kind].*.parquet`` files.
         Recommend: ``./rawnc``
-
     outdir : str
-        Directory where merged raw netcdf files will be put. Recommend:
-        ``./rawnc/``.  Note that the netcdf files will be named following
-        the data in *deploymentyaml*:
-        ``glider_nameglider_serial-YYYYmmddTHHMM-rawebd.nc`` and
-        ``...rawdbd.nc``.
-
+        Directory where merged raw parquet files will be put. Recommend:
+        ``./[delayed, realtime]_rawnc/``. Note that the netcdf files will be named using the ``glider_name`` in
+         the *deploymentyaml*:
+        ``[glider_name]_rawgli.parquet`` for the glider (navigation) data and
+        ``[glider_name]_[kind]pld.parquet`` for the payload (science) data.
     deploymentyaml : str
         YAML text file with deployment information for this glider.
-
-    incremental : bool
-        Only add new files....
+    kind : str
+        Indicating the type of pld files to be read in, either ``raw`` or ``sub``.
     """
 
     with open(deploymentyaml) as fin:
@@ -302,9 +296,43 @@ def _remove_fill_values(df, fill_value=9999):
 
 
 def raw_to_timeseries(indir, outdir, deploymentyaml, kind='raw',
-                      profile_filt_time=100, profile_min_time=300, maxgap=300, interpolate=False, fnamesuffix=''):
+                      profile_filt_time=100, profile_min_time=300,
+                      maxgap=300, interpolate=False,
+                      fnamesuffix=''):
     """
-    A little different than above, for the 4-file version of the data set.
+    Parameters
+    ----------
+    indir : str
+        Directory with raw netcdf files.
+    outdir : str
+        Directory to put the merged time series files.
+    deploymentyaml: str
+        YAML text file with deployment information.
+    kind: str
+        The kind of raw netcdf payload files to be read in, either 'raw' or 'sub'.
+    profile_filt_time : float
+        Time, in seconds, over which to smooth the pressure time series for
+        finding up and down profiles (note, doesn't filter the data that is
+        saved). Default is 100 seconds.
+    profile_min_time : float
+        Minimum length of time, in seconds, of a profile in order to be
+        retained in time series output. Default is 300 seconds.
+    maxgap: float
+        Maximum length of time, in seconds, that values are interpolated over.
+        Default is 300 seconds.
+    interpolate: boolean
+        Indicating if the data should be interpolated (True), or not (False).
+        Default is False. If interpolate is in the deploymentyaml,
+        this argument is ignored.
+    fnamesuffix: str
+        Suffix to append to the end of the the filename. The filename is
+        constructed by using the provided outdir, plus the deployment name
+        that is defined in the deploymentyaml, plus the provided fnamesuffix.
+        Default is ''.
+    Returns
+    -------
+    outname : string
+        filename of the merged netcdf.
     """
 
     with open(deploymentyaml) as fin:
