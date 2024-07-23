@@ -716,7 +716,6 @@ def raw_to_timeseries(indir, outdir, deploymentyaml, *,
         if atts != 'coordinates':
             attr[atts] = ncvar[name][atts]
     ds[name] = (('time'), ebd[name].values, attr)
-
     for name in thenames:
         _log.info('working on %s', name)
         if 'method' in ncvar[name].keys():
@@ -868,8 +867,8 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
     # get the time:
     time = data.pop(0)
     ds['time'] = (('time'), time, attr)
-    ds['latitude'] = 0 * ds.time
-    ds['longitude'] = 0 * ds.time
+    ds['latitude'] = (('time'), np.zeros(len(time)))
+    ds['longitude'] = (('time'), np.zeros(len(time)))
     # get the time_base data:
     basedata = data.pop(0)
     # slot the time_base variable into the right place in the
@@ -908,7 +907,7 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
             ValueError(f'{sensorname} not in science or eng parameter names')
 
         # make the attributes:
-        ncvar[name].pop('coordinates', None)
+        ncvar[name]['coordinates'] = 'time'
         attrs = ncvar[name]
         attrs = utils.fill_required_attrs(attrs)
         ds[name] = (('time'), val, attrs)
@@ -921,18 +920,17 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
     ds = utils.get_distance_over_ground(ds)
 
     ds = utils.get_derived_eos_raw(ds)
-    ds = ds.assign_coords(longitude=ds.longitude)
-    ds = ds.assign_coords(latitude=ds.latitude)
-    ds = ds.assign_coords(depth=ds.depth)
 
     # screen out-of-range times; these won't convert:
     ds['time'] = ds.time.where((ds.time>0) & (ds.time<6.4e9), np.NaN)
-    ds['time'] = (('time'), (ds.time.values.astype('timedelta64[s]') +
-                  np.datetime64('1970-01-01T00:00:00')).astype('datetime64[ns]'), attr)
+    # convert time to datetime64:
+    ds['time'] = (ds.time*1e9).astype('datetime64[ns]')
+    ds['time'].attrs = attr
 
     ds = utils.fill_metadata(ds, deployment['metadata'], device_data)
-    start = ds['time'].values[0]
-    end = ds['time'].values[-1]
+
+    start = ds.time.values[0]
+    end = ds.time.values[0]
     _log.debug('Long')
     _log.debug(ds.longitude.values[-2000:])
     ds.attrs['deployment_start'] = str(start)
@@ -951,10 +949,12 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
         pass
     outname = (outdir + '/' + ds.attrs['deployment_name'] + fnamesuffix + '.nc')
     _log.info('writing %s', outname)
+    # convert time back to float64 seconds for ERDDAP etc happiness, as they won't take ns
+    # as a unit:
     ds.to_netcdf(outname, 'w',
                  encoding={'time': {'units': 'seconds since 1970-01-01T00:00:00Z',
-                                    '_FillValue': -999999,
-                                    'dtype': 'int64'}})
+                                    '_FillValue': np.NaN,
+                                    'dtype': 'float64'}})
 
     return outname
 
@@ -1094,6 +1094,95 @@ def parse_logfiles(files):
             pass
 
     return out
+
+
+def parse_logfiles_maybe(files):
+    """
+    Parse time, lat, lon, and amph_total from glider logfiles.
+
+    Parameters
+    ----------
+    files : list of strings or Paths
+        List of logfiles to parse.  Should be sorted.
+
+    Returns
+    -------
+    out : xarray
+        xarray data set with fields time, lon, lat, ampH indexed by surfacing.
+        More could be added.
+    """
+
+    times = [''] * 10000
+    gps = [''] * 10000
+    amph = [''] * 10000
+    surfacereason = ''
+    missionnum = [''] * 10000
+    abortsegment = 0
+    abortcause = 0
+
+    ntimes = 0
+    for fn in files:
+        found_time = False
+
+        with open(fn, 'r') as fin:
+            for l in fin:
+                if 'Curr Time:' in l:
+                    times[ntimes] = l
+                    ntimes += 1
+                    found_time=True
+                elif found_time and 'GPS Location' in l:
+                    gps[ntimes - 1] = l
+                elif found_time and "sensor:m_coulomb_amphr_total" in l:
+                    amph[ntimes-1] = l
+                elif found_time and "Because:" in l:
+                    surfacereason = l
+                elif found_time and "MissionNum" in l:
+                    missionnum[ntimes-1] = l
+                elif found_time and "abort segment:" in l:
+                    abortsegment = l
+                elif found_time and "abort cause:" in l:
+                    abortcause = l
+
+    amph = amph[:ntimes]
+    gps = gps[:ntimes]
+    times = times[:ntimes]
+    missionnum = missionnum[:ntimes]
+
+    # now parse them
+    out = xr.Dataset(coords={'time': ('surfacing', np.zeros(ntimes, dtype='datetime64[ns]'))})
+    out['ampH'] = ('surfacing', np.zeros(ntimes) * np.NaN)
+    out['lon'] = ('surfacing', np.zeros(ntimes) * np.NaN)
+    out['lat'] = ('surfacing', np.zeros(ntimes) * np.NaN)
+    out['missionnum'] = ('surfacing', np.zeros(ntimes) * np.NaN)
+    out.attrs['surfacereason'] = surfacereason
+    # ABORT HISTORY: last abort segment: hal_1002-2024-183-0-0 (0171.0000)
+    out.attrs['abortsegment'] = float(abortsegment[-11:-2])
+    out.attrs['abortcause'] = abortcause
+
+    for i in range(ntimes):
+        timestring = times[i][11:-13]
+        out['time'][i] = np.datetime64(datetime.strptime(timestring, '%a %b %d %H:%M:%S %Y'), 'ns')
+        try:
+            if '=' in amph[i]:
+                st = amph[i].index('=')
+                en = amph[i][st:].index(' ') + st
+                out['ampH'][i] = float(amph[i][(st+1):en])
+
+            #        GPS Location:  4912.737 N -12357.253 E measured    110.757 secs ago
+            sp = gps[i].split()
+            out['lat'][i] = utils.nmea2deg(float(sp[2]))
+            out['lon'][i] = utils.nmea2deg(float(sp[4]))
+
+            # MissionName:calvert.mi MissionNum:hal_1002-2024-183-4-41 (0175.0041)
+            if len(missionnum[i]) > 12:
+                out['missionnum'][i] = float(missionnum[i][-11:-2])
+        except:
+            pass
+
+    return out
+
+
+
 
 
 __all__ = ['binary_to_rawnc', 'merge_rawnc', 'raw_to_timeseries',
