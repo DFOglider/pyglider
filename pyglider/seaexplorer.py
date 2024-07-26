@@ -369,14 +369,8 @@ def raw_to_timeseries(indir, outdir, deploymentyaml, kind='raw',
     thenames = list(ncvar.keys())
     # Check yaml to see if interpolate has been set to True
     if "interpolate" in thenames:
-        # check for common non-boolean values that could be in deploymentyaml
-        if not(isinstance(ncvar["interpolate"], bool)):
-            if ncvar["interpolate"] in ('false', 0, 'no'):
-                interpolate = False
-            if ncvar["interpolate"] in ('true', 1, 'yes'):
-                interpolate = True
-        else:
-            interpolate = ncvar["interpolate"]
+        if ncvar["interpolate"]:
+            interpolate = True
     for i in ['time', 'timebase', 'keep_variables', 'interpolate']:
         if i in thenames:
             thenames.remove(i)
