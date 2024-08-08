@@ -512,6 +512,119 @@ def nmea2deg(nmea):
            np.sign(nmea) * np.remainder(np.abs(nmea), 100) / 60)
     return deg
 
+def sbe43Fhz2conc(pressure, temperature, 
+                  salinity, oxygenFrequency, 
+                  longitude, latitude,
+                  calibrationCoefficients):
+    """
+    Conversion of Sea-Bird 43F oxygen frequency to dissolved oxygen concentration
+    in umol/kg.
+
+    Parameters
+    ----------
+    pressure : `xarray.DataArray`
+        *pressure* on a *time* coordinate. 
+    temperature : `xarray.DataArray`
+        *temperature* on a *time* coordinate.
+    salinity : `xarray.DataArray`
+        *salinity* on a *time* coordinate.
+    longitude : `xarray.DataArray`
+        *longitude* on a *time* coordinate.
+    latitude : `xarray.DataArray`
+        *latitude* on a *time* coordinate.
+    oxygenFrequency : `xarray.DataArray`
+        *oxygenFrequency* on a *time* coordinate.
+    calibrationCoefficients: dict
+        a dict of calibration coefficients, which includes *A*, *B*, *C*,
+        *Enom*, *Foffset*, *Soc*, and *Tau20*.
+
+    Returns
+    -------
+    oxyconc : `xarray.DataArray`
+        Calculated oxygen concentration with units umol/kg with attributes.
+
+    """
+    # convert temperature to units kelvin
+    Tk=273.15 + temperature * 1.0002 
+    # calculate solubility
+    # using the equation used in the calibration files
+    o2sol=sbe43Fo2sol(temperature=temperature, 
+                      salinity=salinity)
+    # for simplicity, rename calibrationCoefficients
+    cc=calibrationCoefficients
+    # calculate dissolved oxygen concentration in ml/l
+    oxyconcmll=cc['Soc'] * (oxygenFrequency + cc['Foffset']) * (1. + cc['A']*temperature + cc['B']*temperature**2 + cc['C']*temperature**3) * o2sol * np.exp(cc['Enom']*pressure/Tk)
+    # correct DO for potential density and convert to umol/kg (the standard units)
+    # absolute salinity
+    SA = gsw.SA_from_SP(SP = salinity, p = pressure, lon = longitude, lat = latitude)
+    # potential density
+    rho = gsw.pot_rho_t_exact(SA = SA,
+                              t=temperature,
+                              p=pressure,
+                              p_ref=0)
+    # convert to umol/kg
+    oxyconc = oxyconcmll * 44660. / rho
+    # fill in attributes for xarray.DataArray
+    # note that the instrument will be added in outside of this fn.
+    attrs = collections.OrderedDict([
+        ('long_name', 'dissolved oxygen concentration'),
+        ('standard_name', 'moles_of_oxygen_per_unit_mass_in_sea_water'),
+        ('units', 'umol kg'),
+        ('comment', ''),
+        ('sources', 'salinity temperature pressure longitude latitute'),
+        ('method', 'sbe43Fhz2conc'),
+        ('observation_type', 'calulated'),
+        ('accuracy', ''),
+        ('precision', ''),
+        ('resolution', '')
+        ])
+    attrs = fill_required_attrs(attrs)
+    oxyconc.attrs = attrs
+    return oxyconc
+    
+def sbe43Fo2sol(temperature, salinity):
+    """
+    Calculates oxygen solubility used to convert Sea-Bird 43F oxygen frequency
+    to concentration. It is (following the documentation) defined as the volume 
+    of oxygen gas at standard temperature and pressure conditions absorbed from 
+    humidity-saturated air at a total pressure of one atmosphere, per unit 
+    volume of the liquid at the temperature of measurement in units ml/l. 
+    Valid for -5 < T < 50 and 0 < S < 60. See reference : 
+        http://www.argodatamgt.org/content/download/26535/181243/file/SBE43_ApplicationNote64_RevJun2013.pdf
+
+    Parameters
+    ----------
+    temperature : `xarray.DataArray`
+        Temperature, in degrees Celcius, measured by the CTD.
+    salinity : `xarray.DataArry`
+        Salinity measured by the CTD.
+
+    Returns
+    -------
+    o2sol : `xarray.DataArray`
+        Calculated oxygen solubility
+
+    """
+    # define the coefficients
+    A0=2.00907
+    A1=3.22014
+    A2=4.0501
+    A3=4.94457
+    A4=-0.256847
+    A5=3.88767
+    B0=-0.00624523 
+    B1=-0.00737614
+    B2=-0.010341
+    B3=-0.00817083
+    C0 = -0.000000488682
+    # calculate Ts
+    Ts=np.log((298.15 - temperature) / (temperature + 273.15))
+    # calculate oxygen solubility
+    o2sol=np.exp(
+        A0 + A1*Ts + A2*Ts**2 + A3*Ts**3 + A4*Ts**4 + A5*Ts**5 +
+        salinity * (B0 + B1*Ts + B2*Ts**2 + B3*Ts**3) +
+        C0*salinity**2)
+    return o2sol
 
 def oxygen_concentration_correction(ds, ncvar):
     """
