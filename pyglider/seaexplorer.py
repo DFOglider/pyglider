@@ -497,6 +497,8 @@ def raw_to_timeseries(indir, outdir, deploymentyaml, kind='raw',
                                               calibrationCoefficients=oxyinst['calibration_coefficients'])
                 attrs = collections.OrderedDict([
                     ('instrument', ncoxy['instrument'])])
+                # add oxyconc attrs to instrument attrs 
+                attrs.update(collections.OrderedDict(oxyconc.attrs))
                 oxyconc.attrs = attrs
                 ds['oxygen_concentration'] = oxyconc
                 
