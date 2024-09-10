@@ -13,6 +13,7 @@ import glob
 import logging
 import numpy as np
 import os
+import re
 import time
 import xarray as xr
 import xml.etree.ElementTree as ET
@@ -345,8 +346,8 @@ def dbd_to_dict(dinkum_file, cachedir, keys=None):
     _log.debug('Diagnostic check passed.  Endian is %s', endian)
 
     nsensors = int(meta['sensors_per_cycle'])
-    currentValues = np.zeros(int(meta['sensors_per_cycle'])) + np.NaN
-    data = np.zeros((DINKUMCHUNKSIZE, nsensors)) + np.NaN
+    currentValues = np.zeros(int(meta['sensors_per_cycle'])) + np.nan
+    data = np.zeros((DINKUMCHUNKSIZE, nsensors)) + np.nan
     # Then there's a data cycle with every sensor marked as updated, giving
     # us our initial values.
     # 01 means updated with 'same value', 10 means updated with a new value,
@@ -370,7 +371,7 @@ def dbd_to_dict(dinkum_file, cachedir, keys=None):
         binaryData.bytealign()
         for i, code in enumerate(updatedCode):
             if code == '00':  # No new value
-                currentValues[i] = np.NaN
+                currentValues[i] = np.nan
             elif code == '01':  # Same value as before.
                 continue
             elif code == '10':  # New value.
@@ -404,7 +405,7 @@ def dbd_to_dict(dinkum_file, cachedir, keys=None):
             if ndata % DINKUMCHUNKSIZE == 0:
                 # need to allocate more data!
                 data = np.concatenate(
-                    (data, np.NaN + np.zeros((DINKUMCHUNKSIZE, nsensors))),
+                    (data, np.nan + np.zeros((DINKUMCHUNKSIZE, nsensors))),
                     axis=0)
         elif d == 'X':
             # End of file cycle tag. We made it through.
@@ -496,7 +497,7 @@ def add_times_flight_sci(fdata, sdata=None):
             sdata['m_present_time_sci'] = np.interp(
                 sdata['sci_m_present_time'], tf, pt, np.nan, np.nan)
         else:
-            sdata['m_present_time_sci'] = np.NaN * sdata['sci_m_present_time']
+            sdata['m_present_time_sci'] = np.nan * sdata['sci_m_present_time']
 
     return fdata, sdata
 
@@ -731,7 +732,7 @@ def raw_to_timeseries(indir, outdir, deploymentyaml, *,
             _log.debug('EBD sensorname %s', sensorname)
             val = ebd[sensorname]
             val = utils._zero_screen(val)
-    #        val[val==0] = np.NaN
+    #        val[val==0] = np.nan
             val = convert(val)
         else:
             _log.debug('DBD sensorname %s', sensorname)
@@ -789,7 +790,8 @@ def raw_to_timeseries(indir, outdir, deploymentyaml, *,
 def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
                          search='*.[D|E]BD', fnamesuffix='',
                          time_base='sci_water_temp', profile_filt_time=100,
-                         profile_min_time=300, maxgap=300):
+                         profile_min_time=300, maxgap=300,
+                         replace_attrs=None):
     """
     Convert directly from binary files to netcdf timeseries file.  Requires
     dbdreader to be installed.
@@ -813,13 +815,23 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
         metadata that is common to multiple ways of processing the data come from the
         first file, and then subsequent files change "netcdf_variables" if desired.
 
-    profile_filt_time : float
+    profile_filt_time : float or None
         time in seconds over which to smooth the pressure time series for
         finding up and down profiles (note, doesn't filter the data that is
-        saved)
+        saved).  If None, then do not find profiles.
 
-    profile_min_time : float
-        minimum time to consider a profile an actual profile (seconds)
+    profile_min_time : float or None
+        minimum time to consider a profile an actual profile (seconds).  If None,
+        then do not find profiles.
+
+    maxgap : float
+        Longest gap in seconds to interpolate over when matching instrument
+        timeseries.
+
+    replace_attrs : dict or None
+        replace global attributes in the metadata after reading the metadata
+        file in.  Helpful when processing runs with only a couple things that
+        change.
 
     Returns
     -------
@@ -831,6 +843,9 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
         raise ImportError('Cannot import dbdreader')
 
     deployment = utils._get_deployment(deploymentyaml)
+    if replace_attrs:
+        for att in replace_attrs:
+            deployment['metadata'][att] = replace_attrs[att]
 
     ncvar = deployment['netcdf_variables']
     device_data = deployment['glider_devices']
@@ -860,7 +875,6 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
         else:
             baseind = nn
 
-    print(*sensors)
     # get the data, with `time_base` as the time source that
     # all other variables are synced to:
     data = list(dbd.get_sync(*sensors))
@@ -892,8 +906,9 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
             val = data[nn]
 
             # interpolate only over those gaps that are smaller than 'maxgap'
+            # in seconds
             _t, _ = dbd.get(ncvar[name]['source'])
-            tg_ind = utils.find_gaps(_t,time,maxgap)
+            tg_ind = utils.find_gaps(_t, time, maxgap)
             val[tg_ind] = np.nan
 
             val = utils._zero_screen(val)
@@ -922,7 +937,7 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
     ds = utils.get_derived_eos_raw(ds)
 
     # screen out-of-range times; these won't convert:
-    ds['time'] = ds.time.where((ds.time>0) & (ds.time<6.4e9), np.NaN)
+    ds['time'] = ds.time.where((ds.time>0) & (ds.time<6.4e9), np.nan)
     # convert time to datetime64:
     ds['time'] = (ds.time*1e9).astype('datetime64[ns]')
     ds['time'].attrs = attr
@@ -939,8 +954,9 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
     _log.debug(ds.depth.values[:100])
     _log.debug(ds.depth.values[2000:2100])
 
-    ds = utils.get_profiles_new(
-        ds, filt_time=profile_filt_time, profile_min_time=profile_min_time)
+    if (profile_filt_time is not None) and (profile_min_time is not None):
+        ds = utils.get_profiles_new(
+            ds, filt_time=profile_filt_time, profile_min_time=profile_min_time)
     _log.debug(ds.depth.values[:100])
     _log.debug(ds.depth.values[2000:2100])
 
@@ -954,7 +970,7 @@ def binary_to_timeseries(indir, cachedir, outdir, deploymentyaml, *,
     # as a unit:
     ds.to_netcdf(outname, 'w',
                  encoding={'time': {'units': 'seconds since 1970-01-01T00:00:00Z',
-                                    '_FillValue': np.NaN,
+                                    '_FillValue': np.nan,
                                     'dtype': 'float64'}})
 
     return outname
@@ -1055,6 +1071,9 @@ def parse_logfiles(files):
     times = [''] * 10000
     gps = [''] * 10000
     amph = [''] * 10000
+    relcharge = np.zeros(10000) * np.nan
+    volts = np.zeros(10000) * np.nan
+
     ntimes = 0
     for fn in files:
         found_time = False
@@ -1069,16 +1088,28 @@ def parse_logfiles(files):
                     gps[ntimes - 1] = ll
                 if found_time and "sensor:m_coulomb_amphr_total" in ll:
                     amph[ntimes-1] = ll
+                if ll.startswith('   sensor:m_lithium_battery_relative_charge'):
+                        pattern = r'=(\d+\.\d+)'
+                        match = re.search(pattern, ll)
+                        relcharge[ntimes-1] = float(match.group(1))
+                if ll.startswith('   sensor:m_battery(volts)='):
+                        pattern = r'=(\d+\.\d+)'
+                        match = re.search(pattern, ll)
+                        volts[ntimes-1] = float(match.group(1))
     amph = amph[:ntimes]
     gps = gps[:ntimes]
     times = times[:ntimes]
-
+    volts = volts[:ntimes]
+    relcharge = relcharge[:ntimes]
     # now parse them
     out = xr.Dataset(
         coords={'time': ('surfacing', np.zeros(ntimes, dtype='datetime64[ns]'))})
-    out['ampH'] = ('surfacing', np.zeros(ntimes) * np.NaN)
-    out['lon'] = ('surfacing', np.zeros(ntimes) * np.NaN)
-    out['lat'] = ('surfacing', np.zeros(ntimes) * np.NaN)
+    out['ampH'] = ('surfacing', np.zeros(ntimes) * np.nan)
+    out['lon'] = ('surfacing', np.zeros(ntimes) * np.nan)
+    out['lat'] = ('surfacing', np.zeros(ntimes) * np.nan)
+    # these don't need to be parsed:
+    out['volts'] = ('surfacing', volts[:ntimes])
+    out['relcharge'] = ('surfacing', relcharge[:ntimes])
 
     for i in range(ntimes):
         timestring = times[i][11:-13]
@@ -1151,10 +1182,10 @@ def parse_logfiles_maybe(files):
 
     # now parse them
     out = xr.Dataset(coords={'time': ('surfacing', np.zeros(ntimes, dtype='datetime64[ns]'))})
-    out['ampH'] = ('surfacing', np.zeros(ntimes) * np.NaN)
-    out['lon'] = ('surfacing', np.zeros(ntimes) * np.NaN)
-    out['lat'] = ('surfacing', np.zeros(ntimes) * np.NaN)
-    out['missionnum'] = ('surfacing', np.zeros(ntimes) * np.NaN)
+    out['ampH'] = ('surfacing', np.zeros(ntimes) * np.nan)
+    out['lon'] = ('surfacing', np.zeros(ntimes) * np.nan)
+    out['lat'] = ('surfacing', np.zeros(ntimes) * np.nan)
+    out['missionnum'] = ('surfacing', np.zeros(ntimes) * np.nan)
     out.attrs['surfacereason'] = surfacereason
     # ABORT HISTORY: last abort segment: hal_1002-2024-183-0-0 (0171.0000)
     out.attrs['abortsegment'] = float(abortsegment[-11:-2])

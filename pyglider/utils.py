@@ -7,6 +7,7 @@ import numpy as np
 from scipy.signal import argrelextrema
 import gsw
 import logging
+from pathlib import Path
 import yaml
 
 
@@ -28,11 +29,15 @@ def get_distance_over_ground(ds):
     ds : `.xarray.Dataset`
         With ``distance_over_ground`` key.
     """
+
     good = ~np.isnan(ds.latitude + ds.longitude)
-    dist = gsw.distance(ds.longitude[good].values, ds.latitude[good].values)/1000
-    dist = np.roll(np.append(dist, 0), 1)
-    dist = np.cumsum(dist)
-    dist = np.interp(ds.time, ds.time[good], dist)
+    if np.any(good):
+        dist = gsw.distance(ds.longitude[good].values, ds.latitude[good].values)/1000
+        dist = np.roll(np.append(dist, 0), 1)
+        dist = np.cumsum(dist)
+        dist = np.interp(ds.time, ds.time[good], dist)
+    else:
+        dist = 0 * ds.latitude.values
     attr = {'long_name': 'distance over ground flown since mission start',
             'method': 'get_distance_over_ground',
             'units': 'km',
@@ -92,8 +97,11 @@ def get_profiles(ds, min_dp=10.0, inversion=3., filt_length=7,
     make two variables: profile_direction and profile_index; this version
     is good for lots of data.  Less good for sparse data
     """
-    profile = ds.pressure.values * np.NaN
-    direction = ds.pressure.values * np.NaN
+    if 'pressure' not in ds:
+        _log.warning('No "pressure" variable in the data set; not searching for profiles')
+        return ds
+    profile = ds.pressure.values * np.nan
+    direction = ds.pressure.values * np.nan
     pronum = 1
     lastpronum = 0
 
@@ -156,6 +164,10 @@ def get_profiles_new(ds, min_dp=10.0, filt_time=100, profile_min_time=300):
     profile_min_time : float, default=300
         Minimum time length of profile in s.
     """
+
+    if 'pressure' not in ds:
+        _log.warning('No "pressure" variable in the data set; not searching for profiles')
+        return ds
 
     profile = ds.pressure.values * 0
     direction = ds.pressure.values * 0
@@ -225,7 +237,6 @@ def get_profiles_new(ds, min_dp=10.0, filt_time=100, profile_min_time=300):
             direction[ins] = -1
             pronum += 1
 
-    _log.debug('Doing this...')
     attrs = collections.OrderedDict([
         ('long_name', 'profile index'),
         ('units', '1'),
@@ -464,10 +475,17 @@ def fill_metadata(ds, metadata, sensor_data):
 
     """
     good = ~np.isnan(ds.latitude.values + ds.longitude.values)
-    ds.attrs['geospatial_lat_max'] = np.max(ds.latitude.values[good])
-    ds.attrs['geospatial_lat_min'] = np.min(ds.latitude.values[good])
-    ds.attrs['geospatial_lon_max'] = np.max(ds.longitude.values[good])
-    ds.attrs['geospatial_lon_min'] = np.min(ds.longitude.values[good])
+    if np.any(good):
+        ds.attrs['geospatial_lat_max'] = np.max(ds.latitude.values[good])
+        ds.attrs['geospatial_lat_min'] = np.min(ds.latitude.values[good])
+        ds.attrs['geospatial_lon_max'] = np.max(ds.longitude.values[good])
+        ds.attrs['geospatial_lon_min'] = np.min(ds.longitude.values[good])
+    else:
+        ds.attrs['geospatial_lat_max'] = np.nan
+        ds.attrs['geospatial_lat_min'] = np.nan
+        ds.attrs['geospatial_lon_max'] = np.nan
+        ds.attrs['geospatial_lon_min'] = np.nan
+
     ds.attrs['geospatial_lat_units'] = 'degrees_north'
     ds.attrs['geospatial_lon_units'] = 'degrees_east'
     ds.attrs['netcdf_version'] = '4.0'  # TODO get this somehow...
@@ -500,7 +518,7 @@ def fill_metadata(ds, metadata, sensor_data):
 
 
 def _zero_screen(val):
-    val[val == 0] = np.NaN
+    val[val == 0] = np.nan
     return val
 
 
@@ -822,6 +840,40 @@ def _get_deployment(deploymentyaml):
                 deployment[k] = deployment_[k]
 
     return deployment
+
+
+def _any_newer(dirname, filename):
+    """
+    Check if any files in dirname are newer than filename
+    """
+    filename = Path(filename)
+    dirname = Path(dirname)
+    print(filename, filename.exists())
+    if not filename.exists():
+        return True
+
+    mod_time = filename.stat().st_mtime
+    is_newer = False
+    for file_path in dirname.iterdir():
+        if file_path.is_file():
+            if file_path.stat().st_mtime > mod_time:
+                is_newer = True
+                break
+
+    return is_newer
+
+
+def _get_glider_name_slocum(current_directory):
+    glider = current_directory.parts[-2]
+    mission = current_directory.parts[-1]
+    print(f'Glider {glider} and mission: {mission}')
+    slocum_glider = glider[4:]
+    if slocum_glider[-4:-3].isnumeric():
+        slocum_glider = slocum_glider[:-4] + '_' + slocum_glider[-4:]
+    else:
+        slocum_glider = slocum_glider[:-3] + '_' + slocum_glider[-3:]
+
+    return glider, mission, slocum_glider
 
 
 __all__ = ['get_distance_over_ground', 'get_glider_depth', 'get_profiles_new',
