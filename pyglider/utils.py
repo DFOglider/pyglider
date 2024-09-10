@@ -545,7 +545,7 @@ def sbe43Fhz2conc(pressure, temperature,
 
     """
     # convert temperature to units kelvin
-    Tk=273.15 + temperature * 1.0002 
+    Tk=273.15 + temperature
     # calculate solubility
     # using the equation used in the calibration files
     o2sol=sbe43Fo2sol(temperature=temperature, 
@@ -557,13 +557,12 @@ def sbe43Fhz2conc(pressure, temperature,
     # correct DO for potential density and convert to umol/kg (the standard units)
     # absolute salinity
     SA = gsw.SA_from_SP(SP = salinity, p = pressure, lon = longitude, lat = latitude)
-    # potential density
-    rho = gsw.pot_rho_t_exact(SA = SA,
-                              t=temperature,
-                              p=pressure,
-                              p_ref=0)
+    # conservative temperature
+    CT = gsw.CT_from_t(SA=SA, t=temperature, p=pressure)
+    # sigma0
+    st0=gsw.sigma0(SA=SA, CT=CT)
     # convert to umol/kg
-    oxyconc = oxyconcmll * 44660. / rho
+    oxyconc = oxyconcmll * 44660. / (st0 + 1000)
     # fill in attributes for xarray.DataArray
     # note that the instrument will be added in outside of this fn.
     attrs = collections.OrderedDict([
