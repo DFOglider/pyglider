@@ -11,8 +11,9 @@ import os
 import numpy as np
 import polars as pl
 import xarray as xr
-
 import pyglider.utils as utils
+import collections
+
 
 _log = logging.getLogger(__name__)
 
@@ -545,6 +546,38 @@ def raw_to_timeseries(
     ds = ds.assign_coords(latitude=ds.latitude)
     ds = ds.assign_coords(depth=ds.depth)
     # ds = ds._get_distance_over_ground(ds)
+    
+    # Calculate oxygen concentration, if needed
+    # see if 'calculate_oxygenConcentration' is in any of ncvar[thenames].keys()
+    calcoxyname = [x for x in thenames if 'calculate_oxygenConcentration' in ncvar[x].keys()]
+    if calcoxyname:
+        for name in calcoxyname:
+            ncoxy = ncvar[name]
+            oxyfn = ncoxy['calculate_oxygenConcentration']
+            oxyinst = deployment['profile_variables'][ncoxy['instrument']]
+            # not sure how to handle different functions (if more than one)
+            # perhaps similar to 'convert' above, maybe 'applyCalibration'
+            if oxyfn == 'sbe43Fhz2conc':
+                # need to supply oxygen frequency, pressure, temperature, salinity,
+                #   longitude, latitude and calibration coef which are in the 
+                #   'profile_variables' portion of the deployment yaml
+                # make fn parameters granular for now
+                oxyconc = utils.sbe43Fhz2conc(pressure=ds.pressure, 
+                                              temperature=ds.temperature, 
+                                              salinity=ds.salinity,
+                                              oxygenFrequency=ds[name],
+                                              longitude=ds.longitude,
+                                              latitude=ds.latitude,
+                                              calibrationCoefficients=oxyinst['calibration_coefficients'])
+                attrs = collections.OrderedDict([
+                    ('instrument', ncoxy['instrument'])])
+                # add oxyconc attrs to instrument attrs 
+                attrs.update(collections.OrderedDict(oxyconc.attrs))
+                oxyconc.attrs = attrs
+                ds['oxygen_concentration'] = oxyconc
+                
+    else:
+        _log.warning('No oxygen required to be converted into concentration.')
 
     ds = utils.fill_metadata(ds, deployment['metadata'], device_data)
 
