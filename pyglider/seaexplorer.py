@@ -318,9 +318,9 @@ def _interp_gli_to_pld(gli, ds, val, indctd, method = 'linear'):
             gli.filter(gli_ind)['time'].to_numpy().astype('datetime64[ns]')
         ).astype(int)
         yp = val[gli_ind]
-    if method is 'linear':
+    if method == 'linear':
         valout = np.interp(x=x, xp=xp, fp=yp)
-    if method is 'zoh':
+    if method == 'zoh':
         zoh = interp1d(x=xp, y=yp, kind='zero', bounds_error=False)
         valout = zoh(x)
     return valout
