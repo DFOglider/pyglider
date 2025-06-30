@@ -299,19 +299,30 @@ def merge_parquet(indir, outdir, deploymentyaml, incremental=False, kind='raw'):
     return True
 
 
-def _interp_gli_to_pld(gli, ds, val, indctd):
+def _interp_gli_to_pld(gli, ds, val, indctd, method = 'linear'):
+    # check method
+    if method not in ['linear', 'zoh']:
+        raise ValueError(
+            "Must provide either 'linear' or 'zoh' for interpolation method."
+        )
     gli_ind = ~np.isnan(val)
+    # define values for interpolation
     # switch for if we are comparing two polars dataframes or a polars dataframe and a xarray dataset
     if type(ds) is pl.DataFrame:
-        valout = np.interp(ds['time'], gli.filter(gli_ind)['time'], val[gli_ind])
+        x = ds['time']
+        xp = gli.filter(gli_ind)['time']
+        yp = val[gli_ind]
     else:
-        valout = np.interp(
-            ds['time'].astype(int),
-            np.array(
-                gli.filter(gli_ind)['time'].to_numpy().astype('datetime64[ns]')
-            ).astype(int),
-            val[gli_ind],
-        )
+        x = ds['time'].astype(int)
+        xp = np.array(
+            gli.filter(gli_ind)['time'].to_numpy().astype('datetime64[ns]')
+        ).astype(int)
+        yp = val[gli_ind]
+    if method is 'linear':
+        valout = np.interp(x=x, xp=xp, fp=yp)
+    if method is 'zoh':
+        zoh = interp1d(x=xp, y=yp, kind='zero', bounds_error=False)
+        valout = zoh(x)
     return valout
 
 
@@ -453,7 +464,6 @@ def raw_to_timeseries(
                             time_var.astype(float),
                             var_non_nan,
                         )
-
                     # interpolate only over those gaps that are smaller than 'maxgap'
                     # apparently maxgap is to be in somethng like seconds, and this data is in ms.  Certainly
                     # the default of 0.3 s was not intended.  Changing default to 10 s:
@@ -471,9 +481,9 @@ def raw_to_timeseries(
                 val = gli.select(sensorname).to_numpy()[:, 0]
                 val = convert(val)
                 # Values from the glider netcdf must be interpolated to match
-                # the sensor netcdf
-                val = _interp_gli_to_pld(gli, ds, val, indctd)
-
+                #   the sensor netcdf
+                interpMethod = 'zoh' if all([i.is_integer() for i in val]) else 'linear'
+                val = _interp_gli_to_pld(gli, ds, val, indctd, interpMethod)
             # make the attributes:
             ncvar[name].pop('coordinates', None)
             attrs = ncvar[name]
