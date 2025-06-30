@@ -13,6 +13,7 @@ import polars as pl
 import xarray as xr
 
 import pyglider.utils as utils
+from scipy.interpolate import interp1d
 
 _log = logging.getLogger(__name__)
 
