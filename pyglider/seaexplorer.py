@@ -13,7 +13,6 @@ import polars as pl
 import xarray as xr
 
 import pyglider.utils as utils
-from scipy.interpolate import interp1d
 
 _log = logging.getLogger(__name__)
 
@@ -322,8 +321,9 @@ def _interp_gli_to_pld(gli, ds, val, indctd, method = 'linear'):
     if method == 'linear':
         valout = np.interp(x=x, xp=xp, fp=yp)
     if method == 'zoh':
-        zoh = interp1d(x=xp, y=yp, kind='zero', bounds_error=False)
-        valout = zoh(x)
+        xp_zoh = np.repeat(xp[1:], 2)
+        yp_zoh = np.repeat(yp, 2)[1:-1]
+        valout = np.interp(x=x, xp=xp_zoh, fp=yp_zoh)
     return valout
 
 
@@ -366,7 +366,6 @@ def raw_to_timeseries(
     """
 
     deployment = utils._get_deployment(deploymentyaml)
-
     metadata = deployment['metadata']
     ncvar = deployment['netcdf_variables']
     device_data = deployment['glider_devices']
