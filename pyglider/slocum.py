@@ -894,10 +894,6 @@ def binary_to_timeseries(
     thenames = list(ncvar.keys())
     thenames.remove('time')
 
-    # get the dbd file
-    _log.info(f'{indir}/{search}')
-    dbd = dbdreader.MultiDBD(pattern=f'{indir}/{search}', cacheDir=cachedir)
-
     # build a new data set based on info in `deployment.`
     # We will use ebd.m_present_time as the interpolant if the
     # variable is in dbd.
@@ -909,13 +905,20 @@ def binary_to_timeseries(
             attr[atts] = ncvar[name][atts]
     sensors = [time_base]
 
+    baseind = None
     for nn, name in enumerate(thenames):
         sensorname = ncvar[name]['source']
         if not sensorname == time_base:
             sensors.append(sensorname)
         else:
             baseind = nn
+    if not baseind:
+        raise RuntimeError('no time source specified.')
 
+    # get the dbd file
+    _log.info(f'{indir}/{search}')
+    dbd = dbdreader.MultiDBD(pattern=f'{indir}/{search}',
+                             cacheDir=cachedir)
     # get the data, with `time_base` as the time source that
     # all other variables are synced to:
     data = list(dbd.get_sync(*sensors))
@@ -951,6 +954,7 @@ def binary_to_timeseries(
             _t, _ = dbd.get(ncvar[name]['source'])
             tg_ind = utils.find_gaps(_t, time, maxgap)
             val[tg_ind] = np.nan
+            _log.debug('number of gaps %s', np.count_nonzero(tg_ind))
 
             val = utils._zero_screen(val)
             val = convert(val)
@@ -968,13 +972,20 @@ def binary_to_timeseries(
         attrs = utils.fill_required_attrs(attrs)
         ds[name] = (('time'), val, attrs)
 
-    _log.info(f'Getting glider depths, {ds}')
-    _log.debug(f'HERE, {ds.pressure[0:100]}')
+    if 'pressure' in ds:
+        _log.info(f'Getting glider depths')
+        _log.debug(ds)
+        _log.debug(f'HERE, {ds.pressure[0:100]}')
+        ds = utils.get_glider_depth(ds)
+        _log.debug(ds.depth.values[:100])
+        _log.debug(ds.depth.values[2000:2100])
+    try:
+        ds = utils.get_distance_over_ground(ds)
+    except:
+        pass
 
-    ds = utils.get_glider_depth(ds)
-    ds = utils.get_distance_over_ground(ds)
-
-    ds = utils.get_derived_eos_raw(ds)
+    if ('temperature' in ds) and ('conductivity' in ds) and ('pressure' in ds):
+        ds = utils.get_derived_eos_raw(ds)
 
     # screen out-of-range times; these won't convert:
     ds['time'] = ds.time.where((ds.time > 0) & (ds.time < 6.4e9), np.nan)
@@ -984,22 +995,13 @@ def binary_to_timeseries(
 
     ds = utils.fill_metadata(ds, deployment['metadata'], device_data)
 
-    start = ds.time.values[0]
-    end = ds.time.values[0]
     _log.debug('Long')
     _log.debug(ds.longitude.values[-2000:])
-    # make sure this is ISO readable....
-    ds.attrs['deployment_start'] = str(start)[:18]
-    ds.attrs['deployment_end'] = str(end)[:18]
-    _log.debug(ds.depth.values[:100])
-    _log.debug(ds.depth.values[2000:2100])
 
     if (profile_filt_time is not None) and (profile_min_time is not None):
         ds = utils.get_profiles_new(
             ds, filt_time=profile_filt_time, profile_min_time=profile_min_time
         )
-    _log.debug(ds.depth.values[:100])
-    _log.debug(ds.depth.values[2000:2100])
 
     try:
         os.mkdir(outdir)
@@ -1139,13 +1141,20 @@ def parse_logfiles(files):
                 if found_time and 'sensor:m_coulomb_amphr_total' in ll:
                     amph[ntimes - 1] = ll
                 if ll.startswith('   sensor:m_lithium_battery_relative_charge'):
-                    pattern = r'=(\d+\.\d+)'
-                    match = re.search(pattern, ll)
-                    relcharge[ntimes - 1] = float(match.group(1))
+                        pattern = r'=(\d+\.\d+)'
+                        match = re.search(pattern, ll)
+                        if match:
+                            relcharge[ntimes-1] = float(match.group(1))
+                        else:
+                            relcharge[ntimes-1] = relcharge[ntimes-2]
                 if ll.startswith('   sensor:m_battery(volts)='):
-                    pattern = r'=(\d+\.\d+)'
-                    match = re.search(pattern, ll)
-                    volts[ntimes - 1] = float(match.group(1))
+                        pattern = r'=(\d+\.\d+)'
+                        match = re.search(pattern, ll)
+                        if match:
+                            volts[ntimes-1] = float(match.group(1))
+                        else:
+                            volts[ntimes-1] = volts[ntimes-2]
+
     amph = amph[:ntimes]
     gps = gps[:ntimes]
     times = times[:ntimes]

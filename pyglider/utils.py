@@ -12,6 +12,8 @@ import xarray as xr
 import yaml
 from scipy.signal import argrelextrema
 
+from pyglider._version import __version__
+
 _log = logging.getLogger(__name__)
 
 
@@ -538,26 +540,31 @@ def fill_metadata(ds, metadata, sensor_data):
     ds.attrs['geospatial_lat_units'] = 'degrees_north'
     ds.attrs['geospatial_lon_units'] = 'degrees_east'
     ds.attrs['netcdf_version'] = '4.0'  # TODO get this somehow...
-    ds.attrs['history'] = 'CPROOF glider toolbox version: pre-tag'
+    ds.attrs['history'] = (
+        f'CPROOF glider toolbox pyglider version: {__version__}'
+    )
     for k, v in metadata.items():
         ds.attrs[k] = v
     ds.attrs['featureType'] = 'trajectory'
     ds.attrs['cdm_data_type'] = 'Trajectory'
     ds.attrs['Conventions'] = 'CF-1.8'
-    ds.attrs['standard_name_vocabulary'] = 'CF STandard Name Table v72'
+    ds.attrs['standard_name_vocabulary'] = 'CF Standard Name Table v72'
     ds.attrs['date_created'] = str(np.datetime64('now')) + 'Z'
     ds.attrs['date_issued'] = str(np.datetime64('now')) + 'Z'
     ds.attrs['date_modified'] = ' '
     ds.attrs['id'] = get_file_id(ds)
-    ds.attrs['deployment_name'] = metadata['deployment_name']
     ds.attrs['title'] = ds.attrs['id']
 
     dt = ds.time.values
     ds.attrs['time_coverage_start'] = '%s' % dt[0]
     ds.attrs['time_coverage_end'] = '%s' % dt[-1]
+    
+    # make sure this is ISO readable....
+    ds.attrs['deployment_start'] = str(dt[0])[:19]
+    ds.attrs['deployment_end'] = str(dt[-1])[:19]
 
     ds.attrs['processing_level'] = (
-        'Level 0 (L0) processed data timeseries; ' 'no corrections or data screening'
+        'Level 0 (L0) processed data timeseries; no corrections or data screening'
     )
 
     for k, v in sensor_data.items():
@@ -787,6 +794,9 @@ def find_gaps(sample_time, timebase, maxgap):
     Return an index into *timebase* where True are times in gaps of *sample_time* larger
     than maxgap.
     """
+    # make sure sample times are strictly increasing
+    sample_time = np.sort(sample_time)
+
     # figure out which sample each time in time base belongs to:
     time_index = np.searchsorted(sample_time, timebase, side='right')
     time_index = np.clip(time_index, 0, len(sample_time) - 1)
@@ -942,6 +952,8 @@ def _get_glider_name_slocum(current_directory):
     else:
         slocum_glider = slocum_glider[:-3] + '_' + slocum_glider[-3:]
 
+    if slocum_glider == 'walle_652':
+        slocum_glider = 'wall_e_652'
     return glider, mission, slocum_glider
 
 
